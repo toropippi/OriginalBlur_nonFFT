@@ -1,0 +1,102 @@
+#pragma kernel XBlur4
+#pragma kernel XBlur6
+#pragma kernel XBlur8
+#pragma kernel XBlur10
+#pragma kernel XBlur12
+#pragma kernel XBlur14
+#pragma kernel XBlur16
+#pragma kernel XBlur18
+#pragma kernel XBlur20
+#pragma kernel XBlur22
+#pragma kernel XBlur24
+#pragma kernel XBlur26
+#pragma kernel XBlur28
+#pragma kernel XBlur30
+#pragma kernel XBlur32
+#pragma kernel XBlur34
+#pragma kernel XBlur36
+#pragma kernel XBlur38
+#pragma kernel XBlur40
+#pragma kernel XBlur42
+#pragma kernel XBlur44
+#pragma kernel XBlur46
+#pragma kernel XBlur48
+#pragma kernel XBlur50
+#pragma kernel XBlur52
+#pragma kernel XBlur54
+#pragma kernel XBlur56
+
+#pragma kernel YBlur4
+#pragma kernel YBlur6
+#pragma kernel YBlur8
+#pragma kernel YBlur10
+#pragma kernel YBlur12
+#pragma kernel YBlur14
+#pragma kernel YBlur16
+#pragma kernel YBlur18
+#pragma kernel YBlur20
+#pragma kernel YBlur22
+#pragma kernel YBlur24
+#pragma kernel YBlur26
+#pragma kernel YBlur28
+#pragma kernel YBlur30
+#pragma kernel YBlur32
+#pragma kernel YBlur34
+#pragma kernel YBlur36
+#pragma kernel YBlur38
+#pragma kernel YBlur40
+#pragma kernel YBlur42
+#pragma kernel YBlur44
+#pragma kernel YBlur46
+#pragma kernel YBlur48
+#pragma kernel YBlur50
+#pragma kernel YBlur52
+#pragma kernel YBlur54
+#pragma kernel YBlur56
+
+
+
+#define W 0.5
+#define WLR (0.5-0.5*W)
+#define FTOI 255.9//float to int
+#define TPB 64//thread per block
+
+
+
+//#define STORE_TEX
+
+int WX;
+
+int loopnum;
+
+RWTexture2D<float4> Tex;
+Texture2D<float4> Tex_ro;
+StructuredBuffer<uint> Buf_ro;
+RWStructuredBuffer<uint> Buf;
+
+groupshared float fblock0r[TPB];
+groupshared float fblock1r[TPB];
+groupshared float fblock0g[TPB];
+groupshared float fblock1g[TPB];
+groupshared float fblock0b[TPB];
+groupshared float fblock1b[TPB];
+
+
+#if (SHADER_API_D3D11 | SHADER_API_GLCORE | SHADER_API_PS4 | SHADER_API_XBOXONE)
+#include "Blur1/Blur1_DX11or12.cginc"
+#else
+#include "Blur1/Blur1_mobile.cginc"
+#endif
+
+
+/*
+SHADER_API_D3D11
+SHADER_API_GLCORE
+SHADER_API_GLES	OpenGL ES 2.0
+SHADER_API_GLES3	OpenGL ES 3.0/3.1
+SHADER_API_METAL	iOS/Mac Metal
+SHADER_API_VULKAN	Vulkan
+SHADER_API_D3D11_9X
+SHADER_API_PS4	PlayStation 4 SHADER_API_PSSL
+SHADER_API_XBOXONE	Xbox One
+*/

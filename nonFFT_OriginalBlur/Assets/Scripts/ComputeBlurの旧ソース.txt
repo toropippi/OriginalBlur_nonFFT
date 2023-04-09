@@ -1,0 +1,1433 @@
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+//これはfloat3型がコンパイルされた後float4として計算されているので少し効率が悪い
+//2710loopで57.7fps_48.7fps
+/*
+#pragma kernel XBlur
+#pragma kernel YBlur
+
+#define W 0.1
+#define WLR (0.5-0.5*W)
+#define FTOI 255.9
+#define GTYPE float3
+
+//x per thread
+#define XPT 30
+#define YPT 16
+#define WX 1920
+#define WY 1080
+#define TPB 64
+
+RWTexture2D<float4> tex;
+Texture2D<float4> tex_ro;
+RWStructuredBuffer<uint> texUintbuf;
+StructuredBuffer<uint> texUintbuf_ro;
+
+groupshared uint blockx[XPT * TPB];
+groupshared uint blocky[YPT * TPB];
+groupshared GTYPE fblock0[TPB];
+groupshared GTYPE fblock1[TPB];
+
+int loopnum;
+
+
+
+[numthreads(TPB, 1, 1)]
+void XBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE cel[XPT];
+    GTYPE reg[2];
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < XPT; i++)
+    {
+        float4 f4 = tex_ro[float2(i * TPB + id.x, id.y)];
+        //[r,g,b],[r,g,b]...
+        blockx[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[id.x * XPT + i];
+        cel[i].x = (t % 256);
+        cel[i].y = (t / 256 % 256);
+        cel[i].z = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0[id.x] = cel[0];
+        fblock1[id.x] = cel[XPT - 1];
+
+        //first 0
+        reg[0] = cel[0] * W + cel[1] * WLR + fblock1[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(XPT-2)
+        [unrool]
+        for (uint i = 1; i < (XPT - 1); i++)
+        {
+            reg[i & 1] = cel[i] * W + cel[i - 1] * WLR + cel[i + 1] * WLR;
+            cel[i - 1] = reg[(i & 1) ^ 1];
+        }
+
+        //last XPT-1
+        reg[(XPT & 1) ^ 1] = cel[XPT - 1] * W + cel[XPT - 2] * WLR + fblock0[(id.x + 1) % TPB] * WLR;
+        cel[XPT - 2] = reg[XPT & 1];
+        cel[XPT - 1] = reg[(XPT & 1) ^ 1];
+    }
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = ((uint)cel[i].x) + 256 * ((uint)cel[i].y) + 65536 * ((uint)cel[i].z);
+        blockx[id.x * XPT + i] = t;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    //shared to global
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[i * TPB + id.x];
+        texUintbuf[(i * TPB + id.x) + id.y * WX] = t;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+[numthreads(TPB, 1, 1)]
+void YBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE cel[YPT];
+    GTYPE reg[2];
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < YPT; i++)
+    {
+        blocky[i * TPB + id.x] = texUintbuf_ro[id.y + (i * TPB + id.x) * WX];
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = blocky[id.x * YPT + i];
+        cel[i].x = (t % 256);
+        cel[i].y = (t / 256 % 256);
+        cel[i].z = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0[id.x] = cel[0];
+        fblock1[id.x] = cel[YPT - 1];
+
+        //first 0
+        reg[0] = cel[0] * W + cel[1] * WLR + fblock1[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(YPT-2)
+        [unrool]
+        for (uint i = 1; i < (YPT - 1); i++)
+        {
+            reg[i & 1] = cel[i] * W + cel[i - 1] * WLR + cel[i + 1] * WLR;
+            cel[i - 1] = reg[(i & 1) ^ 1];
+        }
+
+        //last YPT-1
+        reg[(YPT & 1) ^ 1] = cel[YPT - 1] * W + cel[YPT - 2] * WLR + fblock0[(id.x + 1) % TPB] * WLR;
+        cel[YPT - 2] = reg[YPT & 1];
+        cel[YPT - 1] = reg[(YPT & 1) ^ 1];
+    }
+
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = ((uint)cel[i].x) + 256 * ((uint)cel[i].y) + 65536 * ((uint)cel[i].z);
+        blocky[id.x * YPT + i] = t;
+    }
+
+    //shared to global
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        float4 f4;
+        f4.w = 1;
+        uint t = blocky[i * TPB + id.x];
+        f4.x = (t % 256);
+        f4.y = (t / 256 % 256);
+        f4.z = (t / 65536 % 256);
+        f4.xyz /= FTOI;
+        tex[float2(id.y, i * TPB + id.x)] = f4;
+    }
+}
+
+
+
+*/
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+//6処理につき32(+9)cycleのやつ
+//2710loopで57.6fps_52.6fps
+#pragma kernel XBlur
+#pragma kernel YBlur
+
+#define W 0.01
+#define WLR (0.5-0.5*W)
+#define FTOI 255.9
+#define GTYPE float
+
+//x per thread
+#define XPT 30
+#define YPT 16
+#define WX 1920
+#define WY 1080
+#define TPB 64
+
+RWTexture2D<float4> tex;
+Texture2D<float4> tex_ro;
+RWStructuredBuffer<uint> texUintbuf;
+StructuredBuffer<uint> texUintbuf_ro;
+
+groupshared uint blockx[XPT * TPB];
+groupshared uint blocky[YPT * TPB];
+groupshared GTYPE fblock0r[TPB];
+groupshared GTYPE fblock1r[TPB];
+groupshared GTYPE fblock0g[TPB];
+groupshared GTYPE fblock1g[TPB];
+groupshared GTYPE fblock0b[TPB];
+groupshared GTYPE fblock1b[TPB];
+
+int loopnum;
+
+
+
+[numthreads(TPB, 1, 1)]
+void XBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[XPT];
+    GTYPE celg[XPT];
+    GTYPE celb[XPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < XPT; i++)
+    {
+        float4 f4 = tex_ro[float2(i * TPB + id.x, id.y)];
+        //[r,g,b],[r,g,b]...
+        blockx[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[id.x * XPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[XPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[XPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[XPT - 1];
+
+        //first 0
+        regr[1] = celr[0] * WLR;
+        celr[0] = celr[0] * W + celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        regg[1] = celg[0] * WLR;
+        celg[0] = celg[0] * W + celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        regb[1] = celb[0] * WLR;
+        celb[0] = celb[0] * W + celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(XPT-2)
+        [unrool]
+        for (uint i = 1; i < (XPT - 1); i++)
+        {
+            regr[(i & 1) ^ 1] = celr[i] * WLR;
+            celr[i] = celr[i] * W + regr[i & 1] + celr[i + 1] * WLR;
+            regg[(i & 1) ^ 1] = celg[i] * WLR;
+            celg[i] = celg[i] * W + regg[i & 1] + celg[i + 1] * WLR;
+            regb[(i & 1) ^ 1] = celb[i] * WLR;
+            celb[i] = celb[i] * W + regb[i & 1] + celb[i + 1] * WLR;
+        }
+
+        //last XPT-1
+        celr[XPT - 1] = celr[XPT - 1] * W + regr[(XPT & 1) ^ 1] + fblock0r[(id.x + 1) % TPB] * WLR;
+        celg[XPT - 1] = celg[XPT - 1] * W + regg[(XPT & 1) ^ 1] + fblock0g[(id.x + 1) % TPB] * WLR;
+        celb[XPT - 1] = celb[XPT - 1] * W + regb[(XPT & 1) ^ 1] + fblock0b[(id.x + 1) % TPB] * WLR;
+    }
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blockx[id.x * XPT + i] = t;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    //shared to global
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[i * TPB + id.x];
+        texUintbuf[(i * TPB + id.x) + id.y * WX] = t;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+[numthreads(TPB, 1, 1)]
+void YBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[YPT];
+    GTYPE celg[YPT];
+    GTYPE celb[YPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < YPT; i++)
+    {
+        blocky[i * TPB + id.x] = texUintbuf_ro[id.y + (i * TPB + id.x) * WX];
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = blocky[id.x * YPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[YPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[YPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[YPT - 1];
+
+        //first 0
+        regr[1] = celr[0] * WLR;
+        celr[0] = celr[0] * W + celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        regg[1] = celg[0] * WLR;
+        celg[0] = celg[0] * W + celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        regb[1] = celb[0] * WLR;
+        celb[0] = celb[0] * W + celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(YPT-2)
+        [unrool]
+        for (uint i = 1; i < (YPT - 1); i++)
+        {
+            regr[(i & 1) ^ 1] = celr[i] * WLR;
+            celr[i] = celr[i] * W + regr[i & 1] + celr[i + 1] * WLR;
+            regg[(i & 1) ^ 1] = celg[i] * WLR;
+            celg[i] = celg[i] * W + regg[i & 1] + celg[i + 1] * WLR;
+            regb[(i & 1) ^ 1] = celb[i] * WLR;
+            celb[i] = celb[i] * W + regb[i & 1] + celb[i + 1] * WLR;
+        }
+
+        //last YPT-1
+        celr[YPT - 1] = celr[YPT - 1] * W + regr[(YPT & 1) ^ 1] + fblock0r[(id.x + 1) % TPB] * WLR;
+        celg[YPT - 1] = celg[YPT - 1] * W + regg[(YPT & 1) ^ 1] + fblock0g[(id.x + 1) % TPB] * WLR;
+        celb[YPT - 1] = celb[YPT - 1] * W + regb[(YPT & 1) ^ 1] + fblock0b[(id.x + 1) % TPB] * WLR;
+    }
+
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blocky[id.x * YPT + i] = t;
+    }
+
+    //shared to global
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        float4 f4;
+        f4.w = 1;
+        uint t = blocky[i * TPB + id.x];
+        f4.x = (t % 256);
+        f4.y = (t / 256 % 256);
+        f4.z = (t / 65536 % 256);
+        f4.xyz /= FTOI;
+        tex[float2(id.y, i * TPB + id.x)] = f4;
+    }
+}
+
+
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+//1処理につき6cycleのやつ
+//2710loopで58.0fps_56.2fps
+/*
+#pragma kernel XBlur
+#pragma kernel YBlur
+
+#define W 0.01
+#define WLR (0.5-0.5*W)
+#define FTOI 255.9
+#define GTYPE float
+
+//x per thread
+#define XPT 30
+#define YPT 16
+#define WX 1920
+#define WY 1080
+#define TPB 64
+
+RWTexture2D<float4> tex;
+Texture2D<float4> tex_ro;
+RWStructuredBuffer<uint> texUintbuf;
+StructuredBuffer<uint> texUintbuf_ro;
+
+groupshared uint blockx[XPT * TPB];
+groupshared uint blocky[YPT * TPB];
+groupshared GTYPE fblock0r[TPB];
+groupshared GTYPE fblock1r[TPB];
+groupshared GTYPE fblock0g[TPB];
+groupshared GTYPE fblock1g[TPB];
+groupshared GTYPE fblock0b[TPB];
+groupshared GTYPE fblock1b[TPB];
+
+int loopnum;
+
+
+
+[numthreads(TPB, 1, 1)]
+void XBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[XPT];
+    GTYPE celg[XPT];
+    GTYPE celb[XPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < XPT; i++)
+    {
+        float4 f4 = tex_ro[float2(i * TPB + id.x, id.y)];
+        //[r,g,b],[r,g,b]...
+        blockx[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[id.x * XPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[XPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[XPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[XPT - 1];
+
+        //first 0
+        regr[1] = celr[0] * WLR;
+        regr[0] = celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        celr[0] = celr[0] * W + regr[0];
+        regg[1] = celg[0] * WLR;
+        regg[0] = celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        celg[0] = celg[0] * W + regg[0];
+        regb[1] = celb[0] * WLR;
+        regb[0] = celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+        celb[0] = celb[0] * W + regb[0];
+
+        //1-(XPT-2)
+        [unrool]
+        for (uint i = 1; i < (XPT - 1); i++)
+        {
+            regr[(i & 1) ^ 1] = celr[i] * WLR;
+            regr[i & 1] = regr[i & 1] + celr[i + 1] * WLR;
+            celr[i] = celr[i] * W + regr[i & 1];
+            regg[(i & 1) ^ 1] = celg[i] * WLR;
+            regg[i & 1] = regg[i & 1] + celg[i + 1] * WLR;
+            celg[i] = celg[i] * W + regg[i & 1];
+            regb[(i & 1) ^ 1] = celb[i] * WLR;
+            regb[i & 1] = regb[i & 1] + celb[i + 1] * WLR;
+            celb[i] = celb[i] * W + regb[i & 1];
+        }
+
+        //last XPT-1
+        regr[(XPT & 1) ^ 1] = regr[(XPT & 1) ^ 1] + fblock0r[(id.x + 1) % TPB] * WLR;
+        celr[XPT - 1] = celr[XPT - 1] * W + regr[(XPT & 1) ^ 1];
+        regg[(XPT & 1) ^ 1] = regg[(XPT & 1) ^ 1] + fblock0g[(id.x + 1) % TPB] * WLR;
+        celg[XPT - 1] = celg[XPT - 1] * W + regg[(XPT & 1) ^ 1];
+        regb[(XPT & 1) ^ 1] = regb[(XPT & 1) ^ 1] + fblock0b[(id.x + 1) % TPB] * WLR;
+        celb[XPT - 1] = celb[XPT - 1] * W + regb[(XPT & 1) ^ 1];
+    }
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blockx[id.x * XPT + i] = t;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    //shared to global
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[i * TPB + id.x];
+        texUintbuf[(i * TPB + id.x) + id.y * WX] = t;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+[numthreads(TPB, 1, 1)]
+void YBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[YPT];
+    GTYPE celg[YPT];
+    GTYPE celb[YPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < YPT; i++)
+    {
+        blocky[i * TPB + id.x] = texUintbuf_ro[id.y + (i * TPB + id.x) * WX];
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = blocky[id.x * YPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[YPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[YPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[YPT - 1];
+
+        //first 0
+        regr[1] = celr[0] * WLR;
+        regr[0] = celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        celr[0] = celr[0] * W + regr[0];
+        regg[1] = celg[0] * WLR;
+        regg[0] = celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        celg[0] = celg[0] * W + regg[0];
+        regb[1] = celb[0] * WLR;
+        regb[0] = celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+        celb[0] = celb[0] * W + regb[0];
+
+        //1-(YPT-2)
+        [unrool]
+        for (uint i = 1; i < (YPT - 1); i++)
+        {
+            regr[(i & 1) ^ 1] = celr[i] * WLR;
+            regr[i & 1] = regr[i & 1] + celr[i + 1] * WLR;
+            celr[i] = celr[i] * W + regr[i & 1];
+            regg[(i & 1) ^ 1] = celg[i] * WLR;
+            regg[i & 1] = regg[i & 1] + celg[i + 1] * WLR;
+            celg[i] = celg[i] * W + regg[i & 1];
+            regb[(i & 1) ^ 1] = celb[i] * WLR;
+            regb[i & 1] = regb[i & 1] + celb[i + 1] * WLR;
+            celb[i] = celb[i] * W + regb[i & 1];
+        }
+
+        //last YPT-1
+        regr[(YPT & 1) ^ 1] = regr[(YPT & 1) ^ 1] + fblock0r[(id.x + 1) % TPB] * WLR;
+        celr[YPT - 1] = celr[YPT - 1] * W + regr[(YPT & 1) ^ 1];
+        regg[(YPT & 1) ^ 1] = regg[(YPT & 1) ^ 1] + fblock0g[(id.x + 1) % TPB] * WLR;
+        celg[YPT - 1] = celg[YPT - 1] * W + regg[(YPT & 1) ^ 1];
+        regb[(YPT & 1) ^ 1] = regb[(YPT & 1) ^ 1] + fblock0b[(id.x + 1) % TPB] * WLR;
+        celb[YPT - 1] = celb[YPT - 1] * W + regb[(YPT & 1) ^ 1];
+    }
+
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blocky[id.x * YPT + i] = t;
+    }
+
+    //shared to global
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        float4 f4;
+        f4.w = 1;
+        uint t = blocky[i * TPB + id.x];
+        f4.x = (t % 256);
+        f4.y = (t / 256 % 256);
+        f4.z = (t / 65536 % 256);
+        f4.xyz /= FTOI;
+        tex[float2(id.y, i * TPB + id.x)] = f4;
+    }
+}
+
+*/
+
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+//1処理につき7cycleのやつ
+//2710loopで58.0fps 50.7
+
+#pragma kernel XBlur
+#pragma kernel YBlur
+
+#define W 0.01
+#define WLR (0.5-0.5*W)
+#define FTOI 255.9
+#define GTYPE float
+
+//x per thread
+#define XPT 30
+#define YPT 16
+#define WX 1920
+#define WY 1080
+#define TPB 64
+
+RWTexture2D<float4> tex;
+Texture2D<float4> tex_ro;
+RWStructuredBuffer<uint> texUintbuf;
+StructuredBuffer<uint> texUintbuf_ro;
+
+groupshared uint blockx[XPT * TPB];
+groupshared uint blocky[YPT * TPB];
+groupshared GTYPE fblock0r[TPB];
+groupshared GTYPE fblock1r[TPB];
+groupshared GTYPE fblock0g[TPB];
+groupshared GTYPE fblock1g[TPB];
+groupshared GTYPE fblock0b[TPB];
+groupshared GTYPE fblock1b[TPB];
+
+int loopnum;
+
+
+
+[numthreads(TPB, 1, 1)]
+void XBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[XPT];
+    GTYPE celg[XPT];
+    GTYPE celb[XPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < XPT; i++)
+    {
+        float4 f4 = tex_ro[float2(i * TPB + id.x, id.y)];
+        //[r,g,b],[r,g,b]...
+        blockx[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[id.x * XPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[XPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[XPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[XPT - 1];
+
+        //first 0
+        regr[0] = celr[0] * W + celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        regg[0] = celg[0] * W + celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        regb[0] = celb[0] * W + celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(XPT-2)
+        [unrool]
+        for (uint i = 1; i < (XPT - 1); i++)
+        {
+            regr[i & 1] = celr[i] * W + celr[i - 1] * WLR + celr[i + 1] * WLR;
+            celr[i - 1] = regr[(i & 1) ^ 1];
+            regg[i & 1] = celg[i] * W + celg[i - 1] * WLR + celg[i + 1] * WLR;
+            celg[i - 1] = regg[(i & 1) ^ 1];
+            regb[i & 1] = celb[i] * W + celb[i - 1] * WLR + celb[i + 1] * WLR;
+            celb[i - 1] = regb[(i & 1) ^ 1];
+        }
+
+        //last XPT-1
+        regr[(XPT & 1) ^ 1] = celr[XPT - 1] * W + celr[XPT - 2] * WLR + fblock0r[(id.x + 1) % TPB] * WLR;
+        celr[XPT - 2] = regr[XPT & 1];
+        celr[XPT - 1] = regr[(XPT & 1) ^ 1];
+        regg[(XPT & 1) ^ 1] = celg[XPT - 1] * W + celg[XPT - 2] * WLR + fblock0g[(id.x + 1) % TPB] * WLR;
+        celg[XPT - 2] = regg[XPT & 1];
+        celg[XPT - 1] = regg[(XPT & 1) ^ 1];
+        regb[(XPT & 1) ^ 1] = celb[XPT - 1] * W + celb[XPT - 2] * WLR + fblock0b[(id.x + 1) % TPB] * WLR;
+        celb[XPT - 2] = regb[XPT & 1];
+        celb[XPT - 1] = regb[(XPT & 1) ^ 1];
+    }
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blockx[id.x * XPT + i] = t;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    //shared to global
+    for (i = 0; i < XPT; i++)
+    {
+        uint t = blockx[i * TPB + id.x];
+        texUintbuf[(i * TPB + id.x) + id.y * WX] = t;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+[numthreads(TPB, 1, 1)]
+void YBlur(uint2 id : SV_DispatchThreadID)
+{
+    GTYPE celr[YPT];
+    GTYPE celg[YPT];
+    GTYPE celb[YPT];
+    GTYPE regr[2];
+    GTYPE regg[2];
+    GTYPE regb[2];
+    uint i;
+    //load
+    //global to shared
+    for (i = 0; i < YPT; i++)
+    {
+        blocky[i * TPB + id.x] = texUintbuf_ro[id.y + (i * TPB + id.x) * WX];
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    //shared to reg
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = blocky[id.x * YPT + i];
+        celr[i] = (t % 256);
+        celg[i] = (t / 256 % 256);
+        celb[i] = (t / 65536 % 256);
+    }
+
+
+    //main
+    for (uint j = 0; j < loopnum; j++)
+    {
+        GroupMemoryBarrierWithGroupSync();
+        fblock0r[id.x] = celr[0];
+        fblock1r[id.x] = celr[YPT - 1];
+        fblock0b[id.x] = celb[0];
+        fblock1b[id.x] = celb[YPT - 1];
+        fblock0g[id.x] = celg[0];
+        fblock1g[id.x] = celg[YPT - 1];
+
+        //first 0
+        regr[0] = celr[0] * W + celr[1] * WLR + fblock1r[(id.x + TPB - 1) % TPB] * WLR;
+        regg[0] = celg[0] * W + celg[1] * WLR + fblock1g[(id.x + TPB - 1) % TPB] * WLR;
+        regb[0] = celb[0] * W + celb[1] * WLR + fblock1b[(id.x + TPB - 1) % TPB] * WLR;
+
+        //1-(YPT-2)
+        [unrool]
+        for (uint i = 1; i < (YPT - 1); i++)
+        {
+            regr[i & 1] = celr[i] * W + celr[i - 1] * WLR + celr[i + 1] * WLR;
+            celr[i - 1] = regr[(i & 1) ^ 1];
+            regg[i & 1] = celg[i] * W + celg[i - 1] * WLR + celg[i + 1] * WLR;
+            celg[i - 1] = regg[(i & 1) ^ 1];
+            regb[i & 1] = celb[i] * W + celb[i - 1] * WLR + celb[i + 1] * WLR;
+            celb[i - 1] = regb[(i & 1) ^ 1];
+        }
+
+        //last YPT-1
+        regr[(YPT & 1) ^ 1] = celr[YPT - 1] * W + celr[YPT - 2] * WLR + fblock0r[(id.x + 1) % TPB] * WLR;
+        celr[YPT - 2] = regr[YPT & 1];
+        celr[YPT - 1] = regr[(YPT & 1) ^ 1];
+        regg[(YPT & 1) ^ 1] = celg[YPT - 1] * W + celg[YPT - 2] * WLR + fblock0g[(id.x + 1) % TPB] * WLR;
+        celg[YPT - 2] = regg[YPT & 1];
+        celg[YPT - 1] = regg[(YPT & 1) ^ 1];
+        regb[(YPT & 1) ^ 1] = celb[YPT - 1] * W + celb[YPT - 2] * WLR + fblock0b[(id.x + 1) % TPB] * WLR;
+        celb[YPT - 2] = regb[YPT & 1];
+        celb[YPT - 1] = regb[(YPT & 1) ^ 1];
+    }
+
+
+
+    //store
+    //reg to shared
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        uint t = ((uint)celr[i]) + 256 * ((uint)celg[i]) + 65536 * ((uint)celb[i]);
+        blocky[id.x * YPT + i] = t;
+    }
+
+    //shared to global
+    GroupMemoryBarrierWithGroupSync();
+    for (i = 0; i < YPT; i++)
+    {
+        float4 f4;
+        f4.w = 1;
+        uint t = blocky[i * TPB + id.x];
+        f4.x = (t % 256);
+        f4.y = (t / 256 % 256);
+        f4.z = (t / 65536 % 256);
+        f4.xyz /= FTOI;
+        tex[float2(id.y, i * TPB + id.x)] = f4;
+    }
+}
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+//ここからはFFTのコード
+//URPで公開しているやつの最適化前
+
+#pragma enable_d3d11_debug_symbols
+
+#pragma kernel FFTX
+#pragma kernel FFTY_HADAMARD_IFFTY
+#pragma kernel IFFTX
+#pragma kernel FFTWX
+#pragma kernel FFTWY
+#pragma kernel Trans4
+#pragma kernel Trans1
+#define PI 3.14159265358979323846264338328
+StructuredBuffer<float4> Buf_ro;//x=r、y=i
+RWStructuredBuffer<float4> Buf;
+StructuredBuffer<float> Weight_ro;
+RWStructuredBuffer<float> Weight;
+
+StructuredBuffer<float> WSC;
+
+RWTexture2D<float4> Tex;
+Texture2D<float4> Tex_ro;//read only
+
+
+
+#define M (11)
+#define N (1<<M)
+groupshared float4 block[N];
+groupshared float2 blockW[N];
+
+//#define TRANS
+//#define TextureWrite
+
+[numthreads(N / 2, 1, 1)]
+void FFTWX(uint id : SV_DispatchThreadID, uint grid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+	float2 tmp2 = 0;
+	tmp2.x = Weight[gi + grid * N];
+	tmp2.y = tmp2.x;
+	blockW[gi] = tmp2;
+	tmp2.x = Weight[(gi + N / 2) + grid * N];
+	tmp2.y = tmp2.x;
+	blockW[gi + N / 2] = tmp2;
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (M - loopidx - 1);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float r1 = blockW[t1].x;
+		float i1 = blockW[t1].y;
+		float r0 = blockW[t0].x - r1;
+		float i0 = blockW[t0].y - i1;
+		float rad = -PI * t / dleng;
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		blockW[t0].x += r1;
+		blockW[t0].y += i1;
+		blockW[t1].x = r0 * fcos - i0 * fsin;
+		blockW[t1].y = r0 * fsin + i0 * fcos;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+	float2 reim0 = blockW[gi];
+	float2 reim1 = blockW[gi + N / 2];
+
+	Weight[gi + grid * N] = reim0.x;
+	Weight[(gi + N / 2) + grid * N] = reim1.x;
+}
+
+
+[numthreads(N / 2, 1, 1)]
+void FFTWY(uint id : SV_DispatchThreadID, uint grid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+	float2 tmp2 = 0;
+	tmp2.x = Weight[gi * N + grid];
+	tmp2.y = tmp2.x;
+	blockW[gi] = tmp2;
+	tmp2.x = Weight[(gi + N / 2) * N + grid];
+	tmp2.y = tmp2.x;
+	blockW[gi + N / 2] = tmp2;
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (M - loopidx - 1);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float r1 = blockW[t1].x;
+		float i1 = blockW[t1].y;
+		float r0 = blockW[t0].x - r1;
+		float i0 = blockW[t0].y - i1;
+		float rad = -PI * t / dleng;
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		blockW[t0].x += r1;
+		blockW[t0].y += i1;
+		blockW[t1].x = r0 * fcos - i0 * fsin;
+		blockW[t1].y = r0 * fsin + i0 * fcos;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+	float2 reim0 = blockW[gi];
+	float2 reim1 = blockW[gi + N / 2];
+
+	Weight[gi * N + grid] = reim0.x;
+	Weight[(gi + N / 2) * N + grid] = reim1.x;
+}
+
+
+
+
+
+
+
+
+
+[numthreads(N / 2, 1, 1)]
+void FFTX(uint id : SV_DispatchThreadID, uint grid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+	block[gi] = Tex_ro[float2(gi, grid)];
+	block[gi + N / 2] = Tex_ro[float2(gi + N / 2, grid)];
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (M - loopidx - 1);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float4 ri4t1, ri4t0;
+		ri4t1 = block[t1];
+		ri4t0 = block[t0];
+		float rad = -PI * t / dleng;
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		block[t0] = ri4t0 + ri4t1;
+		ri4t0 -= ri4t1;
+		ri4t1.x = ri4t0.x * fcos - ri4t0.y * fsin;
+		ri4t1.y = ri4t0.x * fsin + ri4t0.y * fcos;
+		ri4t1.z = ri4t0.z * fcos - ri4t0.w * fsin;
+		ri4t1.w = ri4t0.z * fsin + ri4t0.w * fcos;
+		block[t1] = ri4t1;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+#ifdef TextureWrite
+	Tex[float2(gi, grid)] = block[gi];
+	Tex[float2(gi + N / 2, grid)] = block[gi + N / 2];
+#else
+	Buf[gi + grid * N] = block[gi];
+	Buf[(gi + N / 2) + grid * N] = block[gi + N / 2];
+#endif
+}
+
+
+[numthreads(N / 2, 1, 1)]
+void FFTY_HADAMARD_IFFTY(uint id : SV_DispatchThreadID, uint grid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+#ifdef TRANS
+	#ifdef TextureWrite
+		block[gi] = Tex[float2(gi, grid)];
+		block[gi + N / 2] = Tex[float2(gi + N / 2, grid)];
+	#else
+		block[gi] = Buf[gi + grid * N];
+		block[gi + N / 2] = Buf[(gi + N / 2) + grid * N];
+	#endif
+#else
+	#ifdef TextureWrite
+		block[gi] = Tex[float2(grid, gi)];
+		block[gi + N / 2] = Tex[float2(grid, gi + N / 2)];
+	#else
+		block[gi] = Buf[gi * N + grid];
+		block[gi + N / 2] = Buf[(gi + N / 2) * N + grid];
+	#endif
+#endif
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (M - loopidx - 1);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float4 ri4t1, ri4t0;
+		ri4t1 = block[t1];
+		ri4t0 = block[t0];
+		float rad = -PI * t / dleng;
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		//uint irad = t * (N / 2) / dleng;
+		//float fcos = WSC[irad <= (N / 4) ? irad : N / 2 - irad];
+		//if (irad > (N / 4))fcos = -fcos;
+		//float fsin = -WSC[irad <= (N / 4) ? N / 4 - irad : irad - N / 4];
+		block[t0] = ri4t0 + ri4t1;
+		ri4t0 -= ri4t1;
+		ri4t1.x = ri4t0.x * fcos - ri4t0.y * fsin;
+		ri4t1.y = ri4t0.x * fsin + ri4t0.y * fcos;
+		ri4t1.z = ri4t0.z * fcos - ri4t0.w * fsin;
+		ri4t1.w = ri4t0.z * fsin + ri4t0.w * fcos;
+		block[t1] = ri4t1;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+	float4 reim0 = block[gi];
+	float4 reim1 = block[gi + N / 2];
+	reim0 *= Weight[gi + grid * N];// HADAMARD MUL
+	reim1 *= Weight[(gi + N / 2) + grid * N];// HADAMARD MUL
+	block[gi] = reim0;
+	block[gi + N / 2] = reim1;
+
+	//step2 load
+	
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (loopidx);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float4 ri4t1, ri4t0;
+		ri4t1 = block[t1];
+		ri4t0 = block[t0];
+		float rad = PI * t / dleng;//inv -
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		//uint irad = t * (N / 2) / dleng;
+		//float fcos = WSC[irad <= (N / 4) ? irad : N / 2 - irad];
+		//if (irad > (N / 4))fcos = -fcos;
+		//float fsin = WSC[irad <= (N / 4) ? N / 4 - irad : irad - N / 4];
+		float4 ri4t2;
+		ri4t2.x = ri4t1.x * fcos - ri4t1.y * fsin;
+		ri4t2.y = ri4t1.x * fsin + ri4t1.y * fcos;
+		ri4t2.z = ri4t1.z * fcos - ri4t1.w * fsin;
+		ri4t2.w = ri4t1.z * fsin + ri4t1.w * fcos;
+		block[t1] = ri4t0 - ri4t2;
+		block[t0] = ri4t0 + ri4t2;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+#ifdef TRANS
+	#ifdef TextureWrite
+		Tex[float2(gi, grid)] = block[gi];
+		Tex[float2(gi + N / 2, grid)] = block[gi + N / 2];
+	#else
+		Buf[gi + grid * N] = block[gi];
+		Buf[(gi + N / 2) + grid * N] = block[gi + N / 2];
+	#endif
+#else
+	#ifdef TextureWrite
+		Tex[float2(grid, gi)] = block[gi];
+		Tex[float2(grid, gi + N / 2)] = block[gi + N / 2];
+	#else
+		Buf[gi * N + grid] = block[gi];
+		Buf[(gi + N / 2) * N + grid] = block[gi + N / 2];
+	#endif
+#endif
+
+}
+
+
+
+
+
+
+[numthreads(N / 2, 1, 1)]
+void IFFTX(uint id : SV_DispatchThreadID, uint grid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+#ifdef TextureWrite
+	block[gi] = Tex_ro[float2(gi, grid)];
+	block[gi + N / 2] = Tex_ro[float2(gi + N / 2, grid)];
+#else
+	block[gi] = Buf_ro[gi + grid * N];
+	block[gi + N / 2] = Buf_ro[(gi + N / 2) + grid * N];
+#endif
+
+	for (int loopidx = 0; loopidx < M; loopidx++)
+	{
+		uint dleng = 1 << (loopidx);
+		uint t = gi % dleng;
+		uint t0 = (gi / dleng) * dleng * 2 + t;
+		uint t1 = t0 + dleng;
+		GroupMemoryBarrierWithGroupSync();
+		float4 ri4t1, ri4t0;
+		ri4t1 = block[t1];
+		ri4t0 = block[t0];
+		float rad = PI * t / dleng;//inv -
+		float fsin = sin(rad);
+		float fcos = cos(rad);
+		float4 ri4t2;
+		ri4t2.x = ri4t1.x * fcos - ri4t1.y * fsin;
+		ri4t2.y = ri4t1.x * fsin + ri4t1.y * fcos;
+		ri4t2.z = ri4t1.z * fcos - ri4t1.w * fsin;
+		ri4t2.w = ri4t1.z * fsin + ri4t1.w * fcos;
+		block[t1] = ri4t0 - ri4t2;
+		block[t0] = ri4t0 + ri4t2;
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+	Tex[float2(gi, grid)] = block[gi] / N / N;
+	Tex[float2(gi + N / 2, grid)] = block[gi + N / 2] / N / N;
+}
+
+
+
+
+groupshared float4 SubBlock4[256];
+[numthreads(16, 16, 1)]
+//A=A.T (not bank conflict)
+void Trans4(int2 threadIdx : SV_GroupThreadID, int2 blockIdx : SV_GroupID) {
+	// Thread identifiers
+	int tidn = threadIdx.x;
+	int tidm = threadIdx.y;
+	int tidoffset = (tidn + tidm) % 16;
+	int offsetN = 16 * blockIdx.x + tidn;
+	int offsetM = 16 * blockIdx.y + tidm;
+	int woffsetN = 16 * blockIdx.x + tidm;
+	int woffsetM = 16 * blockIdx.y + tidn;
+
+	// load Global to Local
+	//Asub[tidn+tidm*16]=A[offsetN+offsetM*N];
+#ifdef TextureWrite
+	SubBlock4[tidoffset + tidm * 16] = Tex_ro[float2(offsetN, offsetM)];
+#else
+	SubBlock4[tidoffset + tidm * 16] = Buf_ro[offsetN + offsetM * N];
+#endif
+	GroupMemoryBarrierWithGroupSync();
+
+	// Store to AT
+	//AT[woffsetN*M+woffsetM]=Asub[tidm+tidn*16];
+#ifdef TextureWrite
+	Tex[float2(woffsetM, woffsetN)] = SubBlock4[tidoffset + tidn * 16];
+#else
+	Buf[woffsetN * N + woffsetM] = SubBlock4[tidoffset + tidn * 16];
+#endif
+	
+}
+
+groupshared float SubBlock1[256];
+[numthreads(16, 16, 1)]
+//A=A.T (not bank conflict)
+void Trans1(int2 threadIdx : SV_GroupThreadID, int2 blockIdx : SV_GroupID) {
+	// Thread identifiers
+	int tidn = threadIdx.x;
+	int tidm = threadIdx.y;
+	int tidoffset = (tidn + tidm) % 16;
+	int offsetN = 16 * blockIdx.x + tidn;
+	int offsetM = 16 * blockIdx.y + tidm;
+	int woffsetN = 16 * blockIdx.x + tidm;
+	int woffsetM = 16 * blockIdx.y + tidn;
+
+	// load Global to Local
+	//Asub[tidn+tidm*16]=A[offsetN+offsetM*N];
+	SubBlock1[tidoffset + tidm * 16] = Weight_ro[offsetN + offsetM * N];
+
+	GroupMemoryBarrierWithGroupSync();
+
+	// Store to AT
+	//AT[woffsetN*M+woffsetM]=Asub[tidm+tidn*16];
+	Weight[woffsetN * N + woffsetM] = SubBlock1[tidoffset + tidn * 16];
+}

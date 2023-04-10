@@ -1,16 +1,16 @@
 #pragma kernel XBlur
 #pragma kernel YBlur
 
-#define W 0.5
+#define W 0.1
 #define WLR (0.5-0.5*W)
 
 //float to int
 #define FTOI 255.9
 
 //width
-#define WX 1920
+#define WX 1024
 //height
-#define WY 1080
+#define WY 1024
 //thread per block
 #define TPB 64
 //x per thread
@@ -51,7 +51,7 @@ void XBlur(uint2 id : SV_DispatchThreadID)
     //global to shared
     for (i = 0; i < XPT; i++)
     {
-        float4 f4 = Tex_ro[float2(i * TPB + id.x, id.y)];
+        float4 f4 = Tex[float2(i * TPB + id.x, id.y)];
         //[r,g,b],[r,g,b]...
         blockx[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
     }
@@ -210,11 +210,26 @@ void XBlur(uint2 id : SV_DispatchThreadID)
 
     GroupMemoryBarrierWithGroupSync();
     //shared to global
+    /*
     for (i = 0; i < XPT; i++)
     {
         uint t = blockx[i * TPB + id.x];
         Buf[(i * TPB + id.x) + id.y * WX] = t;
     }
+    */
+    for (i = 0; i < XPT; i++)
+    {
+        float4 f4;
+        f4.w = 1;
+        uint t = blockx[i * TPB + id.x];
+        f4.x = (t % 256);
+        f4.y = (t / 256 % 256);
+        f4.z = (t / 65536 % 256);
+        f4.xyz /= FTOI;
+        //Tex[float2(id.y, i * TPB + id.x)] = f4;
+        Tex[float2(i * TPB + id.x, id.y)] = f4;
+    }
+
 }
 
 
@@ -241,10 +256,18 @@ void YBlur(uint2 id : SV_DispatchThreadID)
     uint i;
     //load
     //global to shared
+    /*
     for (i = 0; i < YPT; i++)
     {
         blocky[i * TPB + id.x] = Buf_ro[id.y + (i * TPB + id.x) * WX];
+    }*/
+    for (i = 0; i < YPT; i++)
+    {
+        float4 f4 = Tex[float2(id.y, i * TPB + id.x)];
+        //[r,g,b],[r,g,b]...
+        blocky[i * TPB + id.x] = ((uint)(f4.x * FTOI)) + ((uint)(f4.y * FTOI)) * 256 + ((uint)(f4.z * FTOI)) * 65536;
     }
+
 
 
 

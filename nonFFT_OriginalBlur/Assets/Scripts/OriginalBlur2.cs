@@ -3,8 +3,8 @@ using UnityEngine;
 //[ExecuteInEditMode, ImageEffectAllowedInSceneView]
 public class OriginalBlur2 : MonoBehaviour
 {
-    const int width = 1920;
-    const int height = 1080;
+    const int width = 1024;
+    const int height = 1024;
 
     [SerializeField, Range(0, 30)]
     private int _loopnum = 3;
@@ -19,6 +19,7 @@ public class OriginalBlur2 : MonoBehaviour
     ComputeBuffer Buf = null;
     int kernelXBlur, kernelYBlur;
     int cnt;
+
     private void Awake()
     {
         cnt = 0;
@@ -34,11 +35,16 @@ public class OriginalBlur2 : MonoBehaviour
         if (Buf == null)
             Buf = new ComputeBuffer(width * height, 4);
 
+        Graphics.Blit(source, dst_renderTextures);
+
+
         kernelXBlur = cs.FindKernel("XBlur");
         kernelYBlur = cs.FindKernel("YBlur");
-        cs.SetTexture(kernelXBlur, "Tex_ro", source);
-        cs.SetBuffer(kernelXBlur, "Buf", Buf);
-        cs.SetBuffer(kernelYBlur, "Buf_ro", Buf);
+        //cs.SetTexture(kernelXBlur, "Tex_ro", source);
+        //cs.SetBuffer(kernelXBlur, "Buf", Buf);
+        //cs.SetBuffer(kernelYBlur, "Buf_ro", Buf);
+        //cs.SetTexture(kernelYBlur, "Tex", dst_renderTextures);
+        cs.SetTexture(kernelXBlur, "Tex", dst_renderTextures);
         cs.SetTexture(kernelYBlur, "Tex", dst_renderTextures);
 
         cs.SetInt("loopnum", _loopnum);
